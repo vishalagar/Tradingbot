@@ -1,4 +1,6 @@
 import pandas as pd
+import numpy as np
+import time
 from .strategy import BaseStrategy
 
 class Backtester:
@@ -61,10 +63,38 @@ class Backtester:
         final_equity = self.equity_curve[-1]['equity'] if self.equity_curve else self.initial_capital
         total_return = (final_equity - self.initial_capital) / self.initial_capital * 100
         
-        print(f"Backtest complete.")
+        # --- Enhanced Metrics ---
+        # 1. Win Rate
+        winning_trades = [t for t in self.trades if t.get('pnl', 0) > 0]
+        win_rate = (len(winning_trades) / len(self.trades) * 100) if self.trades else 0.0
+        
+        # 2. Max Drawdown
+        equity_series = pd.Series([d['equity'] for d in self.equity_curve])
+        if not equity_series.empty:
+            running_max = equity_series.cummax()
+            drawdown = (equity_series - running_max) / running_max
+            max_drawdown = drawdown.min() * 100
+        else:
+            max_drawdown = 0.0
+
+        # 3. Sharpe Ratio
+        # Calculate returns on the equity curve
+        returns = equity_series.pct_change().dropna()
+        if len(returns) > 1 and returns.std() != 0:
+            # Simple Sharpe (Mean / Std)
+            sharpe_ratio = returns.mean() / returns.std()
+        else:
+            sharpe_ratio = 0.0  
+            
+        print("-" * 30)
+        print(f"Backtest Complete: {self.strategy.name}")
         print(f"Final Equity: ${final_equity:.2f}")
         print(f"Total Return: {total_return:.2f}%")
         print(f"Trades: {len(self.trades)}")
+        print(f"Win Rate: {win_rate:.2f}%")
+        print(f"Max Drawdown: {max_drawdown:.2f}%")
+        print(f"Sharpe Ratio: {sharpe_ratio:.2f}")
+        print("-" * 30)
         
         return pd.DataFrame(self.equity_curve)
 

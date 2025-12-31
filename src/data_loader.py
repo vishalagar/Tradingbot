@@ -1,93 +1,197 @@
 import ccxt
 import pandas as pd
 import time
+import sqlite3
+import os
+from datetime import datetime
 
 class ExchangeClient:
     def __init__(self, exchange_id='binance'):
         self.exchange_class = getattr(ccxt, exchange_id)
-        self.exchange = self.exchange_class()
         
+        # Load API keys from environment variables
+        api_key = os.getenv('EXCHANGE_API_KEY')
+        secret = os.getenv('EXCHANGE_SECRET')
+        
+        if api_key and secret:
+            self.exchange = self.exchange_class({
+                'apiKey': api_key,
+                'secret': secret
+            })
+        else:
+            self.exchange = self.exchange_class()
+            
+        self.db_path = 'trading_data.db'
+        self._init_db()
+        
+    def _init_db(self):
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS ohlcv (
+                symbol TEXT,
+                timeframe TEXT,
+                timestamp INTEGER,
+                open REAL,
+                high REAL,
+                low REAL,
+                close REAL,
+                volume REAL,
+                PRIMARY KEY (symbol, timeframe, timestamp)
+            )
+        ''')
+        conn.commit()
+        conn.close()
+        
+    def _save_to_db(self, df, symbol, timeframe):
+        if df.empty:
+            return
+        conn = sqlite3.connect(self.db_path)
+        data = []
+        for row in df.itertuples():
+            ts = int(row.timestamp.timestamp() * 1000)
+            data.append((symbol, timeframe, ts, row.open, row.high, row.low, row.close, row.volume))
+            
+        cursor = conn.cursor()
+        cursor.executemany('''
+            INSERT OR IGNORE INTO ohlcv (symbol, timeframe, timestamp, open, high, low, close, volume)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ''', data)
+        conn.commit()
+        conn.close()
+        
+    def _load_from_db(self, symbol, timeframe, limit):
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM ohlcv WHERE symbol=? AND timeframe=?", (symbol, timeframe))
+        count = cursor.fetchone()[0]
+        
+        query = f'''
+            SELECT timestamp, open, high, low, close, volume 
+            FROM ohlcv 
+            WHERE symbol=? AND timeframe=? 
+            ORDER BY timestamp DESC 
+            LIMIT ?
+        '''
+        cursor.execute(query, (symbol, timeframe, limit))
+        rows = cursor.fetchall()
+        conn.close()
+        
+        if not rows:
+            return pd.DataFrame(), 0
+            
+        rows = rows[::-1]
+        df = pd.DataFrame(rows, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+        return df, count
+
     def fetch_ohlcv(self, symbol, timeframe='1h', limit=100):
-        """
-        Fetch OHLCV data from the exchange.
-        Supports pagination to fetch more than exchange limit.
+        # Fetch OHLCV data from the exchange.
+        # Supports pagination to fetch more than exchange limit.
+        # Checks DB first, updates with new data, or fetches full history if sufficient GAP.
+
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute("SELECT MAX(timestamp), COUNT(*) FROM ohlcv WHERE symbol=? AND timeframe=?", (symbol, timeframe))
+        max_ts, count = cursor.fetchone()
+        conn.close()
         
-        :param symbol: Trading pair symbol (e.g., 'BTC/USDT')
-        :param timeframe: Candle timeframe (e.g., '1h', '1m')
-        :param limit: Number of candles to fetch
-        :return: DataFrame with OHLCV data
-        """
-        try:
-            all_ohlcv = []
-            since = None
-            
-            # Estimate start time if limit is huge to optimize (optional, but good for 'since' based fetching)
-            # For now, we'll fetch backwards or forwards depending on exchange capabilities.
-            # Most reliable public method is usually fetching most recent, then finding previous.
-            # But ccxt fetch_ohlcv with 'since' is standard. 
-            
-            # Let's simple loop: if we need 200,000, we can't just ask for it.
-            # We will use the internal pagination if `since` is provided, OR
-            # we simply call it multiple times.
-            
-            # Implementation: Fetch from most recent backwards (if supported) or just rely on 'since'.
-            # A common pattern to get 'last N candles' is:
-            # 1. CCXT usually doesn't support "backward pagination" easily across all exchanges.
-            # 2. We can calculate 'since' = Now - (N * timeframe_duration)
-            
+        fetch_from_api = False
+        since = None
+        
+        if max_ts is None or count < limit:
+            # Not enough data or no data -> Generic Fetch (potentially large)
+            # Logic: If we need 200k candles but have 10k, we basically need to fetch everything again 
+            # or try to stitch. Unifying fetch_ohlcv logic:
+            # Simplest for "speed up backtest": IF count < limit, do full fetch.
+            fetch_from_api = True
+            # Calculate since for full fetch
             duration_seconds = self.exchange.parse_timeframe(timeframe)
             now = self.exchange.milliseconds()
             since = now - (limit * duration_seconds * 1000)
+        else:
+            # We have enough history, just fetch NEW data since max_ts
+            fetch_from_api = True
+            since = max_ts + 1
             
+        if fetch_from_api:
+            # Perform API Fetch (Incremental or Full)
+            new_data_limit = limit if (max_ts is None or count < limit) else 1000 # Just fetch recent if incremental
+            
+            # Helper to fetch with pagination (reusing logic, but adapted)
+            # Note: We duplicate logic slightly or can refactor. I'll include the loop here.
+            
+            all_ohlcv = []
             fetched_count = 0
-            while fetched_count < limit:
-                # Max limit per call varies, usually 1000. Safe bet is 1000.
-                fetch_limit = min(limit - fetched_count, 1000)
+            curr_limit = new_data_limit
+            # If incremental, we don't know exact 'limit' needed, loop until no more.
+            # Safe bet: just loop with 'since'.
+            
+            while True:
+                # If we have a hard limit (full fetch), respect it.
+                # If incremental, stop when no new data.
+                batch_limit = 1000
+                if max_ts is None or count < limit:
+                     batch_limit = min(curr_limit - fetched_count, 1000)
+                     if batch_limit <= 0: break
                 
-                # We need to provide 'since' to get older data
-                ohlcv = self.exchange.fetch_ohlcv(symbol, timeframe, since=since, limit=fetch_limit)
-                
-                if not ohlcv:
+                try:
+                    ohlcv = self.exchange.fetch_ohlcv(symbol, timeframe, since=since, limit=batch_limit)
+                except Exception as e:
+                    print(f"Fetch error: {e}")
                     break
                     
+                if not ohlcv:
+                    break
+                
                 all_ohlcv.extend(ohlcv)
                 fetched_count += len(ohlcv)
-                
-                # Update 'since' for next batch: last candle timestamp + 1 candle duration ?
-                # Or simply take the last timestamp from the fetched data + 1ms
                 last_timestamp = ohlcv[-1][0]
-                since = last_timestamp + 1 
-                
-                # Rate limit safety
+                since = last_timestamp + 1
                 time.sleep(self.exchange.rateLimit / 1000)
-                print(f"Fetched {fetched_count} / {limit} candles...", flush=True)
                 
-            print(f"\nFetch complete. Total: {fetched_count}")
-            df = pd.DataFrame(all_ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-            
-            # Remove duplicates just in case
-            df = df.drop_duplicates(subset=['timestamp'])
-            
-            # Just return the number requested if we got more
-            if len(df) > limit:
-                df = df.iloc[-limit:]
+                # If incremental (only fetching new), break if we got less than requested (means we are at tip)
+                if max_ts is not None and count >= limit and len(ohlcv) < batch_limit:
+                    break
+                    
+            if all_ohlcv:
+                df_new = pd.DataFrame(all_ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                df_new['timestamp'] = pd.to_datetime(df_new['timestamp'], unit='ms')
+                self._save_to_db(df_new, symbol, timeframe)
+                print(f"Updated DB with {len(df_new)} new candles.")
                 
-            return df
-        except Exception as e:
-            print(f"Error fetching data: {e}")
-            return pd.DataFrame()
+        # 2. Load from DB
+        df_final, _ = self._load_from_db(symbol, timeframe, limit)
+        return df_final
 
     def get_latest_price(self, symbol):
-        """
-        Fetch the latest ticker price.
-        
-        :param symbol: Trading pair symbol (e.g., 'BTC/USDT')
-        :return: Latest price as float
-        """
+        # Fetch the latest ticker price.
+        # 
+        # :param symbol: Trading pair symbol (e.g., 'BTC/USDT')
+        # :return: Latest price as float
         try:
             ticker = self.exchange.fetch_ticker(symbol)
             return ticker['last']
         except Exception as e:
             print(f"Error fetching ticker: {e}")
+            return None
+
+    def create_market_buy_order(self, symbol, amount):
+        # Place a market buy order.
+        # :param symbol: Trading pair (e.g. 'BTC/USDT')
+        # :param amount: Amount of base currency to buy
+        try:
+            return self.exchange.create_market_buy_order(symbol, amount)
+        except Exception as e:
+            print(f"Error placing buy order: {e}")
+            return None
+
+    def create_market_sell_order(self, symbol, amount):
+        # Place a market sell order.
+        # :param symbol: Trading pair (e.g. 'BTC/USDT')
+        # :param amount: Amount of base currency to sell
+        try:
+            return self.exchange.create_market_sell_order(symbol, amount)
+        except Exception as e:
+            print(f"Error placing sell order: {e}")
             return None
