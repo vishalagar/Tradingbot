@@ -8,7 +8,7 @@ def test_enhanced():
     # Need sufficient data for EMA 200, so we fetch 2000 candles
     # Fetching 200000 candles (large history)
     # Note: This might take a while to download
-    df = client.fetch_ohlcv('BTC/USDT', timeframe='1h', limit=20000)
+    df = client.fetch_ohlcv('BTC/USDT', timeframe='1h', limit=10000)
     
     if df.empty:
         print("FAIL: Could not fetch data.")

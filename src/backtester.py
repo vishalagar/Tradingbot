@@ -12,7 +12,7 @@ class Backtester:
     def run(self, df):
         """
         Run the strategy on historical data.
-        Assumes df has 'open', 'high', 'low', 'close', 'volume', 'timestamp'.
+        Optimized vectorized approach.
         """
         if df.empty:
             print("Empty dataframe provided to backtester.")
@@ -24,70 +24,39 @@ class Backtester:
         
         print(f"Starting backtest for {self.strategy.name}...")
         
-        # Iterate through the DataFrame
-        # Note: Iterating rows is slow in Pandas, but simplest for event-driven simulation.
-        # Vectorization is faster but harder to implement complex logic.
+        # 1. Analyze the whole dataframe once (Vectorized)
+        df_analyzed = self.strategy.analyze(df)
         
-        for i in range(len(df)):
-            # We need a window of data for the strategy to work.
-            # Passing the full dataframe up to index i is inefficient for large datasets,
-            # but usually necessary for indicators.
-            # Optimization: Pre-calculate indicators on the whole DF before looping.
-            pass
-
-        # Optimized Approach:
-        # 1. Calculate Signals on the whole DF
-        df_analyzed = df.copy()
-        
-        # We need to simulate "streaming" data or just calculate indicators at once.
-        # Most indicators (RSI, MACD) can be calculated on the whole column safely (no lookahead bias if shifted correctly).
-        # We need to generate signals row by row OR verify the strategy implementation supports full DF.
-        
-        # Our BaseStrategy.generate_signal currently takes a DF and looks at the last row.
-        # This is good for real-time but slow for backtesting if we slice df.iloc[:i] every time.
-        
-        # For this version, let's accept the inefficiency for correctness and code reuse,
-        # but we can optimize by pre-calculating indicators if the strategy allows.
-        
-        # Actually, let's implement a 'analyze' method in Strategy if possible, or just hack it here.
-        # For simplicity/robustness, we will simulate the loop.
-        
-        # To speed this up, let's just use a sliding window if the strategy needs it, 
-        # or better: MODIFY the Strategy to process the WHOLE dataframe and add a 'signal' column.
-        # But our current Strategy.generate_signal is designed for real-time 'last candle'.
-        
-        signals = []
-        # Pre-calculating indicators (Hack for speed: Instantiate strategy and verify if it can add columns)
-        # We will iterate row by row.
-        
-        current_data_slice = None
-        
-        # Let's handle generic case:
-        for i in range(50, len(df)): # Start at 50 to have enough data for indicators
-             window = df.iloc[:i+1]
-             signal = self.strategy.generate_signal(window)
-             
-             price = window.iloc[-1]['close']
-             timestamp = window.iloc[-1]['timestamp']
-             
-             if signal == 'buy' and position == 0:
+        # 2. Iterate row by row ONLY for trade logic (much faster now)
+        # We can iterate tuples which is faster than iterrows
+        for row in df_analyzed.itertuples():
+            # row.signal, row.close, row.timestamp
+            
+            # Skip if signal is nan
+            if not isinstance(row.signal, str):
+                # Update equity curve for this timestamp
+                current_value = capital if position == 0 else (position * row.close)
+                self.equity_curve.append({'time': row.timestamp, 'equity': current_value})
+                continue
+            
+            if row.signal == 'buy' and position == 0:
                  # Buy
                  cost = capital * (1 - self.fee_rate)
-                 position = cost / price
+                 position = cost / row.close
                  capital = 0
-                 entry_price = price
-                 self.trades.append({'type': 'buy', 'price': price, 'time': timestamp, 'equity': cost})
+                 entry_price = row.close
+                 self.trades.append({'type': 'buy', 'price': row.close, 'time': row.timestamp, 'equity': cost})
                  
-             elif signal == 'sell' and position > 0:
+            elif row.signal == 'sell' and position > 0:
                  # Sell
-                 revenue = position * price * (1 - self.fee_rate)
+                 revenue = position * row.close * (1 - self.fee_rate)
                  capital = revenue
                  position = 0
-                 self.trades.append({'type': 'sell', 'price': price, 'time': timestamp, 'equity': capital, 'pnl': (price - entry_price)/entry_price})
+                 self.trades.append({'type': 'sell', 'price': row.close, 'time': row.timestamp, 'equity': capital, 'pnl': (row.close - entry_price)/entry_price})
             
-             # Mark to market equity
-             current_equity = capital + (position * price)
-             self.equity_curve.append({'time': timestamp, 'equity': current_equity})
+            # Mark to market equity
+            current_value = capital if position == 0 else (position * row.close)
+            self.equity_curve.append({'time': row.timestamp, 'equity': current_value})
 
         final_equity = self.equity_curve[-1]['equity'] if self.equity_curve else self.initial_capital
         total_return = (final_equity - self.initial_capital) / self.initial_capital * 100

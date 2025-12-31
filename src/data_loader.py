@@ -60,7 +60,7 @@ class ExchangeClient:
                 
                 # Rate limit safety
                 time.sleep(self.exchange.rateLimit / 1000)
-                print(f"Fetched {fetched_count} / {limit} candles...")
+                print(f"Fetched {fetched_count} / {limit} candles...", flush=True)
                 
             print(f"\nFetch complete. Total: {fetched_count}")
             df = pd.DataFrame(all_ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
