@@ -3,7 +3,7 @@ import os
 import argparse
 from dotenv import load_dotenv
 from src.data_loader import ExchangeClient
-from src.strategy import RSIStrategy, MACDStrategy, BollingerRSIStrategy
+from src.strategy import RSIStrategy, MACDStrategy, BollingerRSIStrategy, EnhancedTrendRSIStrategy
 from src.notifier import Notifier
 
 # Load environment variables
@@ -13,7 +13,7 @@ def main():
     parser = argparse.ArgumentParser(description='Bitcoin Trading Bot')
     parser.add_argument('--symbol', type=str, default='BTC/USDT', help='Trading Pair')
     parser.add_argument('--timeframe', type=str, default='1h', help='Candle Timeframe')
-    parser.add_argument('--strategy', type=str, default='RSI', choices=['RSI', 'MACD', 'BOLLINGER_RSI'], help='Strategy to use')
+    parser.add_argument('--strategy', type=str, default='RSI', choices=['RSI', 'MACD', 'BOLLINGER_RSI', 'ENHANCED_RSI'], help='Strategy to use')
     
     args = parser.parse_args()
     
@@ -27,6 +27,8 @@ def main():
         strategy = MACDStrategy()
     elif args.strategy == 'BOLLINGER_RSI':
         strategy = BollingerRSIStrategy()
+    elif args.strategy == 'ENHANCED_RSI':
+        strategy = EnhancedTrendRSIStrategy()
     else:
         raise ValueError("Unknown strategy")
         
