@@ -36,23 +36,22 @@ class Notifier:
 
     def notify(self, message):
         """
-        Send a generic notification.
-        """
         self.logger.info(message)
-        self.send_telegram(message)
-        self.send_email("Trading Bot Notification", message)
+        # self.send_telegram(message)
+        # self.send_email("Trading Bot Notification", message)
+        """
 
     def alert_buy(self, symbol, price, strategy_name):
         msg = f"BUY SIGNAL [{symbol}] @ {price} | Strategy: {strategy_name}"
         self.logger.warning(msg) 
-        self.send_telegram(msg)
-        self.send_email(f"BUY ALERT: {symbol}", msg)
+        # self.send_telegram(msg)
+        # self.send_email(f"BUY ALERT: {symbol}", msg)
 
     def alert_sell(self, symbol, price, strategy_name):
         msg = f"SELL SIGNAL [{symbol}] @ {price} | Strategy: {strategy_name}"
         self.logger.warning(msg)
-        self.send_telegram(msg)
-        self.send_email(f"SELL ALERT: {symbol}", msg)
+        # self.send_telegram(msg)
+        # self.send_email(f"SELL ALERT: {symbol}", msg)
         
     def send_telegram(self, message):
         if self.telegram_token and self.telegram_chat_id:

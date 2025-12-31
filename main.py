@@ -14,10 +14,10 @@ def main():
     parser.add_argument('--symbol', type=str, default='BTC/USDT', help='Trading Pair')
     parser.add_argument('--timeframe', type=str, default='1h', help='Candle Timeframe')
     parser.add_argument('--strategy', type=str, default='RSI', choices=['RSI', 'MACD', 'BOLLINGER_RSI', 'ENHANCED_RSI'], help='Strategy to use')
-    parser.add_argument('--live', action='store_true', help='Enable Live Trading (Real Money)')
-    parser.add_argument('--amount', type=float, default=0.0001, help='Amount to trade in base currency')
-    parser.add_argument('--stop-loss', type=float, default=0.02, help='Stop Loss percentage (e.g. 0.02 for 2%)')
-    parser.add_argument('--take-profit', type=float, default=0.04, help='Take Profit percentage (e.g. 0.04 for 4%)')
+    # parser.add_argument('--live', action='store_true', help='Enable Live Trading (Real Money)')
+    # parser.add_argument('--amount', type=float, default=0.0001, help='Amount to trade in base currency')
+    # parser.add_argument('--stop-loss', type=float, default=0.02, help='Stop Loss percentage (e.g. 0.02 for 2%)')
+    # parser.add_argument('--take-profit', type=float, default=0.04, help='Take Profit percentage (e.g. 0.04 for 4%)')
     
     args = parser.parse_args()
     
@@ -36,15 +36,7 @@ def main():
     else:
         raise ValueError("Unknown strategy")
         
-    notifier.notify(f"Starting Trading Bot for {args.symbol} using {strategy.name} on {args.timeframe} timeframe.")
-    if args.live:
-        notifier.notify("WARNING: LIVE TRADING ENABLED. REAL ORDERS WILL BE PLACED.")
-    else:
-        notifier.notify("Running in PAPER/SIMULATION mode.")
-    
-    # State tracking
-    position = None # None, 'long'
-    entry_price = 0.0
+    notifier.notify(f"Starting {strategy.name} Indicator Scanner for {args.symbol} ({args.timeframe})")
     
     while True:
         try:
@@ -52,74 +44,38 @@ def main():
             df = exchange_client.fetch_ohlcv(args.symbol, args.timeframe)
             
             if not df.empty:
-                # Analyze
-                # Using generate_signal which now calls analyze internally for optimization, 
-                # but for real-time we just need the latest.
-                # However, strategy.py implementation of generate_signal returns the string signal directly.
-                signal = strategy.generate_signal(df)
-                current_price = df.iloc[-1]['close']
+                # Analyze full dataframe to get indicators
+                df_analyzed = strategy.analyze(df)
                 
-                print(f"[{time.strftime('%H:%M:%S')}] Price: {current_price} | Signal: {signal} | Postion: {position}")
+                # Get last row
+                curr = df_analyzed.iloc[-1]
                 
-                # --- Risk Management Checks ---
-                if position == 'long':
-                    # Stop Loss
-                    if current_price < entry_price * (1 - args.stop_loss):
-                        notifier.notify(f"STOP LOSS TRIGGERED! Current: {current_price}, Entry: {entry_price}")
-                        if args.live:
-                            order = exchange_client.create_market_sell_order(args.symbol, args.amount)
-                            if order:
-                                notifier.notify(f"SL EXECUTED: SELL {args.amount} @ {current_price}")
-                                position = None
-                                entry_price = 0.0
-                        else:
-                            position = None
-                            entry_price = 0.0
-                            notifier.notify(f"SL SIMULATED: SELL @ {current_price}")
-                            
-                    # Take Profit
-                    elif current_price > entry_price * (1 + args.take_profit):
-                        notifier.notify(f"TAKE PROFIT TRIGGERED! Current: {current_price}, Entry: {entry_price}")
-                        if args.live:
-                            order = exchange_client.create_market_sell_order(args.symbol, args.amount)
-                            if order:
-                                notifier.notify(f"TP EXECUTED: SELL {args.amount} @ {current_price}")
-                                position = None
-                                entry_price = 0.0
-                        else:
-                            position = None
-                            entry_price = 0.0
-                            notifier.notify(f"TP SIMULATED: SELL @ {current_price}")
-
-                # --- Signal Checks ---
+                # Extract key metrics based on strategy
+                price = curr['close']
+                signal = curr['signal']
+                
+                # Build Info String
+                info = f"[{time.strftime('%H:%M:%S')}] Price: {price:.2f} | Signal: {signal}"
+                
+                if 'rsi' in curr:
+                    info += f" | RSI: {curr['rsi']:.2f}"
+                if 'ema_trend' in curr:
+                    trend = "BULL" if price > curr['ema_trend'] else "BEAR"
+                    info += f" | Trend: {trend}"
+                if 'bb_high' in curr:
+                     pass # Maybe too verbose
+                if 'macd' in curr:
+                     info += f" | MACD: {curr['macd']:.2f}"
+                
+                print(info)
+                
                 if signal == 'buy':
-                    if position is None:
-                        notifier.alert_buy(args.symbol, current_price, strategy.name)
-                        if args.live:
-                            order = exchange_client.create_market_buy_order(args.symbol, args.amount)
-                            if order:
-                                notifier.notify(f"ORDER EXECUTED: BUY {args.amount} {args.symbol} @ {current_price}")
-                                position = 'long'
-                                entry_price = current_price
-                        else:
-                            position = 'long' # Paper trade
-                            entry_price = current_price
-                            
+                     notifier.alert_buy(args.symbol, price, strategy.name)
                 elif signal == 'sell':
-                    if position == 'long':
-                        notifier.alert_sell(args.symbol, current_price, strategy.name)
-                        if args.live:
-                            order = exchange_client.create_market_sell_order(args.symbol, args.amount)
-                            if order:
-                                notifier.notify(f"ORDER EXECUTED: SELL {args.amount} {args.symbol} @ {current_price}")
-                                position = None
-                                entry_price = 0.0
-                        else:
-                            position = None # Paper trade
-                            entry_price = 0.0
+                     notifier.alert_sell(args.symbol, price, strategy.name)
             
-            # Rate limit / Wait for next candle
-            time.sleep(10) # check every 10 seconds
+            # Rate limit
+            time.sleep(10)
             
         except KeyboardInterrupt:
             notifier.notify("Stopping Trading Bot...")

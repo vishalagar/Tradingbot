@@ -9,17 +9,13 @@ class ExchangeClient:
     def __init__(self, exchange_id='binance'):
         self.exchange_class = getattr(ccxt, exchange_id)
         
-        # Load API keys from environment variables
-        api_key = os.getenv('EXCHANGE_API_KEY')
-        secret = os.getenv('EXCHANGE_SECRET')
-        
-        if api_key and secret:
-            self.exchange = self.exchange_class({
-                'apiKey': api_key,
-                'secret': secret
-            })
-        else:
-            self.exchange = self.exchange_class()
+        # User requested to disable API usage for now. 
+        # Using public instance only. Explicitly disable keys.
+        self.exchange = self.exchange_class({
+            'apiKey': '', 
+            'secret': '',
+            'enableRateLimit': True
+        })
             
         self.db_path = 'trading_data.db'
         self._init_db()
@@ -54,7 +50,7 @@ class ExchangeClient:
             
         cursor = conn.cursor()
         cursor.executemany('''
-            INSERT OR IGNORE INTO ohlcv (symbol, timeframe, timestamp, open, high, low, close, volume)
+            REPLACE INTO ohlcv (symbol, timeframe, timestamp, open, high, low, close, volume)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ''', data)
         conn.commit()
@@ -111,8 +107,9 @@ class ExchangeClient:
             since = now - (limit * duration_seconds * 1000)
         else:
             # We have enough history, just fetch NEW data since max_ts
+            # Re-fetch the last candle to ensure it updates if it's still open
             fetch_from_api = True
-            since = max_ts + 1
+            since = max_ts
             
         if fetch_from_api:
             # Perform API Fetch (Incremental or Full)
@@ -180,18 +177,22 @@ class ExchangeClient:
         # Place a market buy order.
         # :param symbol: Trading pair (e.g. 'BTC/USDT')
         # :param amount: Amount of base currency to buy
-        try:
-            return self.exchange.create_market_buy_order(symbol, amount)
-        except Exception as e:
-            print(f"Error placing buy order: {e}")
-            return None
+        # try:
+        #     return self.exchange.create_market_buy_order(symbol, amount)
+        # except Exception as e:
+        #     print(f"Error placing buy order: {e}")
+        #     return None
+        print("Live trading disabled. Order ignored.")
+        return None
 
     def create_market_sell_order(self, symbol, amount):
         # Place a market sell order.
         # :param symbol: Trading pair (e.g. 'BTC/USDT')
         # :param amount: Amount of base currency to sell
-        try:
-            return self.exchange.create_market_sell_order(symbol, amount)
-        except Exception as e:
-            print(f"Error placing sell order: {e}")
-            return None
+        # try:
+        #     return self.exchange.create_market_sell_order(symbol, amount)
+        # except Exception as e:
+        #     print(f"Error placing sell order: {e}")
+        #     return None
+        print("Live trading disabled. Order ignored.")
+        return None
